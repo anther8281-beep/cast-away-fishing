@@ -1127,6 +1127,16 @@
     ? 'Welcome back — progress saved on this device.' : '';
   el('btnSound').textContent=muted?'🔇':'🔊';
 
+  // Optional debug harness — completely inert unless the URL contains ?debug.
+  // Lets the deterministic game logic be stepped synchronously for testing,
+  // bypassing the rAF render loop. Exposes no data and runs nothing on its own.
+  if(/[?&]debug/.test(location.search)){
+    window.__ca={game:game,STATE:STATE,FISH:FISH,RAR:RAR,save:save,input:input,
+      update:update,updateReel:updateReel,render:render,
+      startBite:startBite,startReel:startReel,releaseCast:releaseCast,
+      landCatch:landCatch,pickFish:pickFish,valueOf:valueOf,persist:persist};
+  }
+
   requestAnimationFrame(frame);
 
   }catch(err){
