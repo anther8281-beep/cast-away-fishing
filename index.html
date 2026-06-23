@@ -177,6 +177,15 @@
       </div>
     </div>
 
+    <!-- Tutorial / area intro card -->
+    <div class="overlay hidden" id="ovIntro">
+      <div class="card">
+        <h2 id="introTitle" style="margin-top:0">Welcome</h2>
+        <div id="introBody"></div>
+        <button class="btn" id="introBtn">Got it</button>
+      </div>
+    </div>
+
     <div id="toast"></div>
     <div id="boot-error"></div>
   </div>
@@ -283,31 +292,48 @@
   };
 
   // ================= persistence =================
-  var SAVE_KEY='castaway.save.v1';
+  var SAVE_KEY='castaway.save.v2', OLD_KEY='castaway.save.v1';
   var save={
     money:0,
-    up:{rod:0,line:0,lure:0,boat:0},
-    journal:{}, // name -> {count, max}
+    up:{rod:0,line:0,lure:0,reel:0},
+    journal:{},                 // name -> {count, max}
+    area:0, unlockedArea:0,     // current biome + highest reached
+    tut:{done:false, seen:{}},  // first-time tutorial + per-area intro flags
     muted:false
   };
+  // load() is invoked AFTER the AREAS data exists (so migration can clamp to AREAS.length)
   function load(){
     try{
-      var raw=localStorage.getItem(SAVE_KEY);
-      if(raw){var s=JSON.parse(raw);
+      var raw=localStorage.getItem(SAVE_KEY), migrated=false;
+      if(!raw){                 // no v2 save — try migrating a v1 save
+        var old=localStorage.getItem(OLD_KEY);
+        if(old){raw=old;migrated=true;}
+      }
+      if(raw){
+        var s=JSON.parse(raw);
         if(s&&typeof s==='object'){
-          save.money=s.money||0;
-          save.up=Object.assign({rod:0,line:0,lure:0,boat:0},s.up||{});
-          save.journal=s.journal||{};
+          var nAreas=(typeof AREAS!=='undefined')?AREAS.length:1;
+          save.money=+s.money||0;
+          save.up=Object.assign({rod:0,line:0,lure:0,reel:0},s.up||{});
+          delete save.up.boat;  // legacy field no longer used
+          save.journal=(s.journal&&typeof s.journal==='object')?s.journal:{};
+          save.area=clamp(+s.area||0,0,nAreas-1);
+          save.unlockedArea=clamp(+s.unlockedArea||save.area||0,0,nAreas-1);
+          save.tut=Object.assign({done:false,seen:{}},(s.tut&&typeof s.tut==='object')?s.tut:{});
+          if(!save.tut.seen||typeof save.tut.seen!=='object') save.tut.seen={};
+          if(migrated){          // returning v1 player keeps money/journal, skips the intro tutorial
+            save.tut.done=true;
+            if(Object.keys(save.journal).length) save.tut.seen.pier=true;
+          }
           save.muted=!!s.muted;
         }
       }
-    }catch(e){}
+    }catch(e){/* corrupt save: fall back to fresh defaults rather than break boot */}
     muted=save.muted;
   }
   function persist(){
     try{save.muted=muted;localStorage.setItem(SAVE_KEY,JSON.stringify(save));}catch(e){}
   }
-  load();
 
   // ================= data =================
   var RAR={
@@ -319,37 +345,85 @@
     junk:{name:'Junk',color:'#9aa7b8',ppc:0,weight:10},
     treasure:{name:'Treasure',color:'#ffe08a',ppc:0,weight:3}
   };
-  // depth: s=shallow, m=mid, d=deep. time: 'day','night','any'
-  var FISH=[
-    {n:'Bluegill',r:'common',z:'sm',t:'any',min:8,max:26,diff:2,c:'#5fa8d3'},
-    {n:'Perch',r:'common',z:'sm',t:'day',min:10,max:32,diff:2,c:'#7fae57'},
-    {n:'Sardine',r:'common',z:'sm',t:'any',min:6,max:18,diff:2,c:'#aebfcf'},
-    {n:'Sunfish',r:'common',z:'s',t:'day',min:8,max:24,diff:2,c:'#ffcf5a'},
-    {n:'Mackerel',r:'common',z:'sm',t:'any',min:18,max:44,diff:3,c:'#6fd0c4'},
-    {n:'Bass',r:'uncommon',z:'sm',t:'any',min:25,max:62,diff:4,c:'#4f9e5e'},
-    {n:'Carp',r:'uncommon',z:'s',t:'day',min:30,max:84,diff:4,c:'#c89b5a'},
-    {n:'Trout',r:'uncommon',z:'sm',t:'any',min:24,max:56,diff:4,c:'#d18c6a'},
-    {n:'Snapper',r:'uncommon',z:'md',t:'any',min:25,max:66,diff:5,c:'#e8745f'},
-    {n:'Catfish',r:'uncommon',z:'sm',t:'night',min:30,max:104,diff:5,c:'#8b7a5a'},
-    {n:'Pufferfish',r:'uncommon',z:'md',t:'any',min:14,max:36,diff:6,c:'#e6c75a'},
-    {n:'Salmon',r:'rare',z:'md',t:'any',min:42,max:96,diff:6,c:'#ff8a7a'},
-    {n:'Pike',r:'rare',z:'md',t:'any',min:44,max:118,diff:6,c:'#6f9e4f'},
-    {n:'Eel',r:'rare',z:'md',t:'night',min:46,max:128,diff:7,c:'#7a6f9e'},
-    {n:'Tuna',r:'rare',z:'d',t:'any',min:80,max:260,diff:7,c:'#5a86c8'},
-    {n:'Swordfish',r:'epic',z:'d',t:'any',min:150,max:420,diff:8,c:'#9bb6e8'},
-    {n:'Anglerfish',r:'epic',z:'d',t:'night',min:20,max:64,diff:8,c:'#c79bff'},
-    {n:'Manta Ray',r:'epic',z:'d',t:'any',min:200,max:460,diff:8,c:'#6f7fa0'},
-    {n:'Coelacanth',r:'legendary',z:'d',t:'any',min:100,max:210,diff:9,c:'#7be0c0'},
-    {n:'Golden Koi',r:'legendary',z:'md',t:'day',min:32,max:92,diff:9,c:'#ffd27d'},
-    {n:'Giant Squid',r:'legendary',z:'d',t:'night',min:220,max:640,diff:10,c:'#ff9bb0'},
-    {n:'Old Boot',r:'junk',z:'smd',t:'any',min:20,max:40,diff:1,c:'#7c6a55'},
-    {n:'Seaweed',r:'junk',z:'sm',t:'any',min:30,max:90,diff:1,c:'#4f8a5a'},
-    {n:'Treasure Chest',r:'treasure',z:'smd',t:'any',min:25,max:45,diff:3,c:'#ffe08a'}
+  // depth within an area: s=shallow, m=mid, d=deep (picked by cast power). time: day|night|any
+  var AREAS=[
+    {
+      id:'pier', name:'Sunset Pier', tag:'Calm water to learn the ropes.',
+      minigame:'reel', clearCount:6, sailCost:0,
+      theme:{wDay:['#2b7fae','#1d5f8c','#08233f'],wNight:['#16324f','#0a1830','#040a18'],decor:'pier'},
+      intro:['Welcome to the <b>Sunset Pier</b> — gentle water and friendly fish, perfect for learning.',
+             '<b>Mini-game · Reel Bar:</b> hold to lift the green bar and keep the fish inside it until the meter fills. Take your time — the line is forgiving here.'],
+      fish:[
+        {n:'Bluegill',r:'common',z:'sm',t:'any',min:8,max:26,diff:2,c:'#5fa8d3'},
+        {n:'Perch',r:'common',z:'sm',t:'day',min:10,max:32,diff:2,c:'#7fae57'},
+        {n:'Sardine',r:'common',z:'sm',t:'any',min:6,max:18,diff:2,c:'#aebfcf'},
+        {n:'Sunfish',r:'common',z:'s',t:'day',min:8,max:24,diff:2,c:'#ffcf5a'},
+        {n:'Mackerel',r:'common',z:'sm',t:'any',min:18,max:44,diff:3,c:'#6fd0c4'},
+        {n:'Bass',r:'uncommon',z:'sm',t:'any',min:25,max:62,diff:3,c:'#4f9e5e'},
+        {n:'Carp',r:'uncommon',z:'s',t:'day',min:30,max:84,diff:4,c:'#c89b5a'},
+        {n:'Trout',r:'uncommon',z:'sm',t:'any',min:24,max:56,diff:4,c:'#d18c6a'},
+        {n:'Catfish',r:'uncommon',z:'sm',t:'night',min:30,max:104,diff:4,c:'#8b7a5a'},
+        {n:'Pike',r:'rare',z:'md',t:'any',min:44,max:118,diff:5,c:'#6f9e4f'},
+        {n:'Salmon',r:'rare',z:'md',t:'any',min:42,max:96,diff:5,c:'#ff8a7a'},
+        {n:'Golden Koi',r:'legendary',z:'md',t:'day',min:32,max:92,diff:7,c:'#ffd27d'},
+        {n:'Old Boot',r:'junk',z:'smd',t:'any',min:20,max:40,diff:1,c:'#7c6a55'},
+        {n:'Treasure Chest',r:'treasure',z:'smd',t:'any',min:25,max:45,diff:3,c:'#ffe08a'}
+      ]
+    },
+    {
+      id:'reef', name:'Coral Reef', tag:'Bright, lively, quick on the bite.',
+      minigame:'rhythm', clearCount:6, sailCost:600,
+      theme:{wDay:['#1aa3b0','#0f7c8c','#063a4a'],wNight:['#0e4a55','#06303a','#021a22'],decor:'coral'},
+      intro:['The <b>Coral Reef</b> bursts with colour — and the fish here are faster.',
+             '<b>Mini-game · Rhythm Strike:</b> a marker sweeps across the bar. <b>TAP</b> when it crosses the green strike-zone to land a hit and fill the meter. Mistimed taps lose ground.'],
+      fish:[
+        {n:'Clownfish',r:'common',z:'s',t:'any',min:6,max:14,diff:3,c:'#ff8a3d'},
+        {n:'Blue Tang',r:'common',z:'sm',t:'day',min:10,max:26,diff:3,c:'#2f7fd6'},
+        {n:'Angelfish',r:'common',z:'sm',t:'any',min:12,max:30,diff:3,c:'#ffd24d'},
+        {n:'Seahorse',r:'uncommon',z:'s',t:'any',min:8,max:20,diff:4,c:'#d9a36a'},
+        {n:'Parrotfish',r:'uncommon',z:'sm',t:'day',min:25,max:60,diff:4,c:'#3fcf8f'},
+        {n:'Snapper',r:'uncommon',z:'m',t:'any',min:25,max:66,diff:5,c:'#e8745f'},
+        {n:'Lionfish',r:'rare',z:'md',t:'night',min:20,max:46,diff:6,c:'#e85f7a'},
+        {n:'Grouper',r:'rare',z:'md',t:'any',min:50,max:140,diff:6,c:'#9a8a5a'},
+        {n:'Moray Eel',r:'rare',z:'d',t:'night',min:60,max:180,diff:7,c:'#6f8a5a'},
+        {n:'Sea Turtle',r:'epic',z:'md',t:'day',min:80,max:200,diff:7,c:'#5fae7a'},
+        {n:'Reef Shark',r:'epic',z:'d',t:'any',min:120,max:300,diff:8,c:'#8fa0b0'},
+        {n:'Mermaid Pearl',r:'legendary',z:'d',t:'night',min:30,max:70,diff:9,c:'#ff9bd0'},
+        {n:'Message Bottle',r:'treasure',z:'sm',t:'any',min:20,max:30,diff:2,c:'#ffe08a'}
+      ]
+    },
+    {
+      id:'abyss', name:'The Abyss', tag:'Cold, dark, and full of giants.',
+      minigame:'tug', clearCount:5, sailCost:3500,
+      theme:{wDay:['#143a5e','#0a2038','#03101e'],wNight:['#0c2036','#06101e','#020812'],decor:'abyss'},
+      intro:['The <b>Abyss</b> — monsters of the deep lurk in the dark. Big risk, huge reward.',
+             '<b>Mini-game · Tug of War:</b> reel (hold) only while the fish <b>TIRES</b> (green). Pull while it <b>FIGHTS</b> (red) and your line strains — let go before it snaps!'],
+      fish:[
+        {n:'Lanternfish',r:'common',z:'smd',t:'any',min:8,max:20,diff:5,c:'#7fd6c4'},
+        {n:'Giant Isopod',r:'uncommon',z:'md',t:'any',min:20,max:50,diff:6,c:'#9a8f7a'},
+        {n:'Viperfish',r:'uncommon',z:'md',t:'night',min:20,max:40,diff:6,c:'#6f7f9e'},
+        {n:'Gulper Eel',r:'rare',z:'d',t:'any',min:50,max:160,diff:7,c:'#7a6f9e'},
+        {n:'Anglerfish',r:'rare',z:'d',t:'night',min:20,max:64,diff:7,c:'#c79bff'},
+        {n:'Swordfish',r:'epic',z:'d',t:'any',min:150,max:420,diff:8,c:'#9bb6e8'},
+        {n:'Manta Ray',r:'epic',z:'d',t:'any',min:200,max:460,diff:8,c:'#6f7fa0'},
+        {n:'Coelacanth',r:'legendary',z:'d',t:'any',min:100,max:210,diff:9,c:'#7be0c0'},
+        {n:'Colossal Squid',r:'legendary',z:'d',t:'night',min:220,max:640,diff:9,c:'#ff9bb0'},
+        {n:'Megalodon',r:'legendary',z:'d',t:'any',min:600,max:1500,diff:10,c:'#aebccc'},
+        {n:'The Kraken',r:'legendary',z:'d',t:'night',min:500,max:1800,diff:10,c:'#b07ad6'},
+        {n:'Sunken Chest',r:'treasure',z:'d',t:'any',min:30,max:60,diff:4,c:'#ffe08a'}
+      ]
+    }
   ];
+  function curArea(){return AREAS[clamp(save.area,0,AREAS.length-1)];}
+  var FISH=curArea().fish; // points at the current area's pool; updated by setArea()
   function rarColor(r){return (RAR[r]||RAR.common).color;}
 
+  load();              // apply saved progress (includes v1 -> v2 migration)
+  FISH=curArea().fish; // re-point pool to the loaded area
+  persist();           // write v2 immediately so a migration is durable even with no further action
+
   // ================= game state =================
-  var STATE={TITLE:'title',IDLE:'idle',CAST:'cast',WAIT:'wait',BITE:'bite',REEL:'reel',CAUGHT:'caught',MISS:'miss'};
+  var STATE={TITLE:'title',IDLE:'idle',CAST:'cast',WAIT:'wait',BITE:'bite',FIGHT:'fight',CAUGHT:'caught',MISS:'miss'};
   var game={
     state:STATE.TITLE,
     paused:false,
@@ -362,10 +436,13 @@
     waitTimer:0,
     biteTimer:0,
     hooked:null,    // pending fish
+    mgName:'reel',  // active mini-game for the current fight
     reel:{prog:0,bar:0.5,barV:0,fishY:0.5,fishV:0,target:0.5,reTimer:0,barHalf:0.12},
+    rhythm:{prog:0,marker:0.5,dir:1,zone:0.5,zoneHalf:0.14,speed:1,flash:0,flashCol:'#6fe3a4',slack:1},
+    tug:{prog:0,tension:0,phase:'tire',phaseT:0,need:6},
     result:null,    // {fish, len, value, isNew, isRecord}
     shake:0,
-    msgTimer:0,
+    coach:'',       // first-time tutorial coaching line (shown above the hint)
     hint:''
   };
   var DAY_LEN=210; // seconds for full 24h cycle
@@ -393,9 +470,15 @@
       if(f.z.indexOf(zone)<0) continue;
       if(f.t==='day'&&night) continue;
       if(f.t==='night'&&!night) continue;
-      // deep zone requires a boat
-      if(zone==='d'&&!save.up.boat&&f.r!=='junk') continue;
       pool.push(f);
+    }
+    if(!pool.length){ // nothing at this depth right now — fall back to any time-eligible fish
+      for(var k=0;k<FISH.length;k++){
+        var g=FISH[k];
+        if(g.t==='day'&&night) continue;
+        if(g.t==='night'&&!night) continue;
+        pool.push(g);
+      }
     }
     return pool;
   }
@@ -455,24 +538,25 @@
     if(k==='e'){toggleShop();}
     else if(k==='j'){toggleJournal();}
     else if(k==='m'){toggleSound();}
-    else if(k==='escape'){closeOverlays();}
+    else if(k==='escape'){ if(!ov.intro.classList.contains('hidden')) dismissCard(); else closeOverlays(); }
   });
   window.addEventListener('keyup',function(e){
     if(e.key===' '||e.code==='Space'){up();}
   });
 
   // ================= UI wiring =================
-  var ov={title:el('ovTitle'),shop:el('ovShop'),journal:el('ovJournal')};
+  var ov={title:el('ovTitle'),shop:el('ovShop'),journal:el('ovJournal'),intro:el('ovIntro')};
   function el(id){return document.getElementById(id);}
   function show(o){o.classList.remove('hidden');}
   function hide(o){o.classList.add('hidden');}
 
-  el('btnPlay').addEventListener('click',function(){audioInit();SFX.click();hide(ov.title);game.state=STATE.IDLE;});
+  el('btnPlay').addEventListener('click',function(){audioInit();SFX.click();hide(ov.title);game.state=STATE.IDLE;startTutorialIfNeeded();});
   el('btnShop').addEventListener('click',toggleShop);
   el('btnJournal').addEventListener('click',toggleJournal);
   el('btnSound').addEventListener('click',toggleSound);
   el('btnShopClose').addEventListener('click',function(){SFX.click();closeOverlays();});
   el('btnJournalClose').addEventListener('click',function(){SFX.click();closeOverlays();});
+  el('introBtn').addEventListener('click',function(){audioInit();SFX.click();dismissCard();});
 
   function toggleSound(){
     muted=!muted;persist();
@@ -485,26 +569,26 @@
     if(game.state!==STATE.TITLE) game.paused=false;
   }
   function toggleShop(){
-    if(game.state===STATE.TITLE) return;
+    if(game.state===STATE.TITLE||!ov.intro.classList.contains('hidden')) return;
     if(!ov.shop.classList.contains('hidden')){closeOverlays();return;}
     hide(ov.journal);renderShop();show(ov.shop);game.paused=true;SFX.click();
   }
   function toggleJournal(){
-    if(game.state===STATE.TITLE) return;
+    if(game.state===STATE.TITLE||!ov.intro.classList.contains('hidden')) return;
     if(!ov.journal.classList.contains('hidden')){closeOverlays();return;}
     hide(ov.shop);renderJournal();show(ov.journal);game.paused=true;SFX.click();
   }
 
   // upgrade defs
   var UPS=[
-    {key:'rod',name:'🎣 Rod',max:5,costs:[50,150,400,1000,2500],
-     desc:function(l){return 'Wider catch bar — easier reeling. Lv '+l+'/5';}},
-    {key:'line',name:'🧵 Line',max:5,costs:[60,180,450,1100,2700],
-     desc:function(l){return 'Reels faster, slips less. Lv '+l+'/5';}},
-    {key:'lure',name:'✨ Lure',max:5,costs:[80,220,550,1300,3000],
-     desc:function(l){return 'Quicker bites & better odds of rare fish. Lv '+l+'/5';}},
-    {key:'boat',name:'⛵ Boat',max:1,costs:[1200],
-     desc:function(l){return l?'Unlocked — cast far to reach The Deep.':'Unlocks The Deep: epic & legendary fish.';}}
+    {key:'rod',name:'🎣 Rod',max:6,costs:[40,110,260,600,1300,2800],
+     desc:function(l){return 'Wider catch zone — much easier reeling. Lv '+l+'/6';}},
+    {key:'line',name:'🧵 Line',max:6,costs:[50,140,320,720,1500,3200],
+     desc:function(l){return 'Stronger line — reels faster, slips slower. Lv '+l+'/6';}},
+    {key:'reel',name:'⚙️ Reel',max:6,costs:[70,180,400,860,1700,3500],
+     desc:function(l){return 'Smoother reel — fills the catch meter quicker. Lv '+l+'/6';}},
+    {key:'lure',name:'✨ Lure',max:6,costs:[60,160,360,800,1600,3400],
+     desc:function(l){return 'Faster bites & better odds of rare fish. Lv '+l+'/6';}}
   ];
   function renderShop(){
     el('shopMoney').textContent=fmt(save.money);
@@ -523,6 +607,26 @@
         btn.addEventListener('click',function(){buy(u,cost);});}
       row.appendChild(btn);rows.appendChild(row);
     });
+    // ----- Voyage: travel between areas, gated by completing the previous one -----
+    var hd=document.createElement('div');
+    hd.style.cssText='margin:16px 2px 4px;font-weight:800;font-size:12px;opacity:.72;letter-spacing:1px';
+    hd.textContent='⛵ VOYAGE';
+    rows.appendChild(hd);
+    AREAS.forEach(function(a,idx){
+      var row=document.createElement('div');row.className='row';
+      var here=idx===save.area, unlocked=idx<=save.unlockedArea;
+      var caught=caughtInArea(a);
+      row.innerHTML='<div class="info"><div class="nm">'+a.name+(here?' · 📍 here':'')+'</div>'+
+        '<div class="ds">'+a.tag+' &nbsp;·&nbsp; '+Math.min(caught,a.clearCount)+'/'+a.clearCount+' to clear</div></div>';
+      var btn=document.createElement('button');btn.className='buy';
+      if(here){btn.textContent='HERE';btn.classList.add('max');btn.disabled=true;}
+      else if(unlocked){btn.textContent='Sail ⛵';btn.addEventListener('click',function(){sailTo(idx);});}
+      else if(idx===save.unlockedArea+1){
+        if(!areaCleared(save.unlockedArea)){btn.textContent='🔒 finish '+AREAS[save.unlockedArea].name;btn.classList.add('max');btn.disabled=true;}
+        else{btn.textContent='Unlock 💰 '+fmt(a.sailCost);btn.disabled=save.money<a.sailCost;btn.addEventListener('click',function(){sailTo(idx);});}
+      }else{btn.textContent='🔒 locked';btn.classList.add('max');btn.disabled=true;}
+      row.appendChild(btn);rows.appendChild(row);
+    });
   }
   function buy(u,cost){
     if(save.money<cost) return;
@@ -533,22 +637,29 @@
   function renderJournal(){
     var grid=el('journalGrid');grid.innerHTML='';
     var caught=0,total=0;
-    FISH.forEach(function(f){
-      if(f.r==='junk') return;
-      total++;
-      var j=save.journal[f.n];
-      var disc=!!j;if(disc) caught++;
-      var c=document.createElement('div');c.className='fcard'+(disc?'':' undisc');
-      if(disc){
-        c.innerHTML='<div class="fn">'+f.n+'</div>'+
-          '<div class="fr" style="color:'+rarColor(f.r)+'">'+(RAR[f.r].name)+'</div>'+
-          '<div class="fd">Caught ×'+j.count+'<br>Best '+j.max+' cm</div>';
-      }else{
-        c.innerHTML='<div class="fn">???</div>'+
-          '<div class="fr" style="color:'+rarColor(f.r)+'">'+(RAR[f.r].name)+'</div>'+
-          '<div class="fd">Not yet caught</div>';
-      }
-      grid.appendChild(c);
+    AREAS.forEach(function(a,idx){
+      var locked=idx>save.unlockedArea;
+      var hd=document.createElement('div');
+      hd.style.cssText='grid-column:1/-1;font-weight:800;font-size:13px;margin:8px 0 2px;opacity:.85';
+      hd.innerHTML='📍 '+a.name+(locked?' &nbsp;🔒':'');
+      grid.appendChild(hd);
+      a.fish.forEach(function(f){
+        if(f.r==='junk') return;
+        total++;
+        var j=save.journal[f.n];
+        if(j) caught++;
+        var c=document.createElement('div');c.className='fcard'+(j?'':' undisc');
+        if(j){
+          c.innerHTML='<div class="fn">'+f.n+'</div>'+
+            '<div class="fr" style="color:'+rarColor(f.r)+'">'+RAR[f.r].name+'</div>'+
+            '<div class="fd">Caught ×'+j.count+'<br>Best '+j.max+' cm</div>';
+        }else{
+          c.innerHTML='<div class="fn">???</div>'+
+            '<div class="fr" style="color:'+rarColor(f.r)+'">'+(locked?'Locked':RAR[f.r].name)+'</div>'+
+            '<div class="fd">'+(locked?'Sail here to find it':'Not yet caught')+'</div>';
+        }
+        grid.appendChild(c);
+      });
     });
     el('journalCount').textContent=caught+' / '+total+' species';
   }
@@ -582,23 +693,18 @@
   function startBite(){
     game.hooked=pickFish(game.zone);
     game.state=STATE.BITE;
-    game.biteTimer=clamp(1.15-0.0,0.7,1.3); // reaction window
+    game.biteTimer=1.7; // generous reaction window (was ~1.15s — felt too punishing)
     SFX.bite();
     game.bobber.dip=1;
+    if(!save.tut.done) game.coach='A bite! Tap / press Space the moment you see the “!”.';
   }
-  function startReel(){
-    game.state=STATE.REEL;
-    var f=game.hooked;
-    var r=game.reel;
-    r.prog=0.32;
-    r.bar=0.5;r.barV=0;
-    r.fishY=0.5;r.fishV=0;r.target=0.5;r.reTimer=0;
-    r.barHalf=clamp(0.10+save.up.rod*0.018,0.10,0.20);
-    r.diff=f.diff;
-    r.fill=(0.50+save.up.line*0.055)-f.diff*0.013;
-    r.drain=0.20+f.diff*0.028;
-    r.fishSpeed=0.45+f.diff*0.12;
-    r.reInterval=clamp(1.5-f.diff*0.11,0.28,1.5);
+  // begin the fish-fight using the current area's signature mini-game
+  function startFight(){
+    var name=MG[curArea().minigame]?curArea().minigame:'reel';
+    game.mgName=name;
+    MG[name].init(game.hooked);
+    game.state=STATE.FIGHT;
+    if(!save.tut.done) game.coach=MG[name].coach||'';
   }
   function landCatch(){
     var f=game.hooked;
@@ -612,7 +718,9 @@
       j.count++;
       if(len>j.max){j.max=len;if(!isNew) isRecord=true;}
     }
+    if(!save.tut.done) save.tut.done=true; // first catch ends the intro coaching
     persist();
+    checkAreaComplete();
     game.result={fish:f,len:len,value:val,isNew:isNew,isRecord:isRecord};
     game.state=STATE.CAUGHT;
     game.shake=Math.min(14,4+f.diff);
@@ -675,58 +783,226 @@
         break;
 
       case STATE.BITE:
-        game.hint='Bite! TAP NOW to set the hook!';
+        game.hint='Bite! TAP / SPACE to set the hook!';
         game.biteTimer-=dt;
         game.bobber.y=WATER_Y+8+Math.sin(game.t*30)*4; // violent dip
-        if(input.pressEdge){startReel();}
+        if(input.pressEdge){startFight();}
         else if(game.biteTimer<=0){loseFish('late');toast('Too slow — it got away.');}
         break;
 
-      case STATE.REEL:
-        updateReel(dt);
+      case STATE.FIGHT:
+        (MG[game.mgName]||MG.reel).update(dt);
         break;
 
       case STATE.CAUGHT:
       case STATE.MISS:
         game.hint='';
-        if(input.pressEdge){game.state=STATE.IDLE;game.result=null;}
+        if(input.pressEdge){game.state=STATE.IDLE;game.result=null;game.coach='';}
         break;
     }
     clearEdges();
   }
 
-  function updateReel(dt){
-    var r=game.reel;
-    game.hint='Hold to lift the bar — keep the fish inside it!';
-    // bar physics (y: 0 top, 1 bottom; hold lifts up = decrease)
-    var grav=1.55,lift=3.7;
-    if(input.held) r.barV-=lift*dt; else r.barV+=grav*dt;
-    r.barV=clamp(r.barV,-1.4,1.4);
-    r.bar+=r.barV*dt;
-    if(r.bar<r.barHalf){r.bar=r.barHalf;r.barV=0;}
-    if(r.bar>1-r.barHalf){r.bar=1-r.barHalf;r.barV*=-0.3;}
-    // fish movement
-    r.reTimer-=dt;
-    if(r.reTimer<=0){
-      r.reTimer=r.reInterval*rand(0.6,1.3);
-      r.target=rand(0.08,0.92);
-      if(chance(0.10+r.diff*0.03)) r.target=chance(0.5)?rand(0,0.12):rand(0.88,1); // dart
+  // ===== mini-game registry (one signature game per area) =====
+  // Each: init(fish), update(dt) -> calls landCatch()/loseFish(), draw().
+  var MG={
+    reel:{
+      name:'Reel Bar',
+      coach:'Hold to lift the bar and keep the fish inside the green zone. There’s no rush — the line holds.',
+      init:function(f){
+        var r=game.reel;
+        r.prog=0.45;                                    // higher start = more time before escape
+        r.bar=0.5; r.barV=0;
+        r.fishY=0.5; r.target=0.5; r.reTimer=0;
+        r.barHalf=clamp(0.13+save.up.rod*0.02,0.13,0.26); // bigger base & max bar
+        r.diff=f.diff;
+        r.fill=0.55+save.up.line*0.05+(save.up.reel||0)*0.05-f.diff*0.010;
+        r.drain=0.13+f.diff*0.016;                      // gentler drain = more time
+        r.fishSpeed=Math.min(1.15,0.40+f.diff*0.085);   // capped below bar max velocity (1.4)
+        r.reInterval=clamp(1.8-f.diff*0.10,0.45,1.8);
+      },
+      update:function(dt){
+        var r=game.reel;
+        game.hint='Hold to lift the bar — keep the fish inside it!';
+        var grav=1.5,lift=3.6;
+        if(input.held) r.barV-=lift*dt; else r.barV+=grav*dt;
+        r.barV=clamp(r.barV,-1.4,1.4);
+        r.bar+=r.barV*dt;
+        if(r.bar<r.barHalf){r.bar=r.barHalf;r.barV=0;}
+        if(r.bar>1-r.barHalf){r.bar=1-r.barHalf;r.barV*=-0.3;}
+        r.reTimer-=dt;
+        if(r.reTimer<=0){
+          r.reTimer=r.reInterval*rand(0.6,1.3);
+          r.target=rand(0.10,0.90);
+          if(chance(0.08+r.diff*0.025)) r.target=chance(0.5)?rand(0,0.14):rand(0.86,1); // dart
+        }
+        var dir=r.target-r.fishY, step=r.fishSpeed*dt;
+        if(Math.abs(dir)<=step) r.fishY=r.target; else r.fishY+=Math.sign(dir)*step;
+        r.fishY=clamp(r.fishY+Math.sin(game.t*6)*0.0012,0,1);
+        var inZone=Math.abs(r.fishY-r.bar)<=r.barHalf;
+        r.inZone=inZone;
+        if(inZone){r.prog+=r.fill*dt;reelTick(dt);} else {r.prog-=r.drain*dt;}
+        r.prog=clamp(r.prog,0,1);
+        if(r.prog>=1){landCatch();}
+        else if(r.prog<=0){loseFish('slip');toast('The line slipped — it got away!');}
+      },
+      draw:function(){drawReel();}
+    },
+    // --- Coral Reef: tap when the sweeping marker crosses the green zone ---
+    rhythm:{
+      name:'Rhythm Strike',
+      coach:'TAP when the moving marker is over the green zone. Keep the rhythm going!',
+      init:function(f){
+        var r=game.rhythm;
+        r.prog=0.42;
+        r.marker=0.5; r.dir=1;
+        r.zone=rand(0.25,0.75);
+        r.zoneHalf=clamp(0.17+save.up.rod*0.018,0.17,0.30)-f.diff*0.006;
+        r.speed=0.85+f.diff*0.10;                                   // sweeps per second
+        r.hitGain=0.15+save.up.line*0.012+(save.up.reel||0)*0.012;
+        r.missPen=0.05;
+        r.drain=0.05+f.diff*0.011;                                  // passive slack loss
+        r.flash=0; r.flashCol='#6fe3a4';
+      },
+      update:function(dt){
+        var r=game.rhythm;
+        game.hint='TAP when the marker hits the green zone!';
+        r.marker+=r.dir*r.speed*dt;
+        if(r.marker>=1){r.marker=1;r.dir=-1;}
+        if(r.marker<=0){r.marker=0;r.dir=1;}
+        if(r.flash>0) r.flash-=dt;
+        r.prog-=r.drain*dt;
+        if(input.pressEdge){
+          if(Math.abs(r.marker-r.zone)<=r.zoneHalf){
+            r.prog+=r.hitGain; r.flash=0.25; r.flashCol='#6fe3a4'; SFX.bite();
+            r.zone=rand(0.15,0.85);                                 // relocate after a hit
+          }else{
+            r.prog-=r.missPen; r.flash=0.2; r.flashCol='#ff6b81'; SFX.snap();
+          }
+        }
+        r.prog=clamp(r.prog,0,1);
+        if(r.prog>=1){landCatch();}
+        else if(r.prog<=0){loseFish('slip');toast('It shook the hook!');}
+      },
+      draw:function(){drawRhythm();}
+    },
+    // --- The Abyss: reel while the fish tires (green), ease off while it fights (red) ---
+    tug:{
+      name:'Tug of War',
+      coach:'Hold to REEL while it TIRES (green). Let go while it FIGHTS (red) or the line snaps!',
+      init:function(f){
+        var u=game.tug;
+        u.prog=0.30; u.tension=0;
+        u.phase='tire'; u.phaseT=rand(1.1,1.7);
+        u.gain=0.18+save.up.line*0.015+(save.up.reel||0)*0.015-f.diff*0.006;
+        u.strain=0.55+f.diff*0.05;                 // tension/sec while pulling during a fight
+        u.relax=0.55+save.up.line*0.03;            // tension recovery/sec when easing off
+        u.recover=0.05;                            // prog lost/sec when slacking during tire
+        u.fightDrain=0.06+f.diff*0.006;            // prog lost/sec during a fight
+        u.tireLen=clamp(1.7-f.diff*0.07,0.8,1.7);
+        u.fightLen=0.7+f.diff*0.06;
+      },
+      update:function(dt){
+        var u=game.tug;
+        game.hint=u.phase==='tire'?'TIRING — reel it in! (hold)':'FIGHTING — ease off! (release)';
+        u.phaseT-=dt;
+        if(u.phaseT<=0){
+          if(u.phase==='tire'){u.phase='fight';u.phaseT=u.fightLen*rand(0.7,1.2);SFX.bite();}
+          else{u.phase='tire';u.phaseT=u.tireLen*rand(0.8,1.2);}
+        }
+        if(u.phase==='tire'){
+          // reeling holds the line steady (no tension recovery); only easing off recovers tension
+          if(input.held){u.prog+=u.gain*dt;reelTick(dt);}
+          else{u.prog-=u.recover*dt;u.tension=Math.max(0,u.tension-u.relax*dt);}
+        }else{
+          if(input.held){u.tension+=u.strain*dt;u.prog-=u.fightDrain*0.3*dt;}
+          else{u.tension=Math.max(0,u.tension-u.relax*dt);u.prog-=u.fightDrain*dt;}
+        }
+        u.prog=clamp(u.prog,0,1); u.tension=clamp(u.tension,0,1);
+        if(u.prog>=1){landCatch();}
+        else if(u.tension>=1){loseFish('snap');toast('SNAP! The line broke.');}
+        else if(u.prog<=0){loseFish('slip');toast('It took all your line — it got away!');}
+      },
+      draw:function(){drawTug();}
     }
-    var dir=r.target-r.fishY;
-    var step=r.fishSpeed*dt;
-    if(Math.abs(dir)<=step) r.fishY=r.target; else r.fishY+=Math.sign(dir)*step;
-    r.fishY=clamp(r.fishY+Math.sin(game.t*6)*0.0015,0,1);
-    // progress
-    var inZone=Math.abs(r.fishY-r.bar)<=r.barHalf;
-    if(inZone){r.prog+=r.fill*dt;reelTick(dt);}
-    else r.prog-=r.drain*dt;
-    r.prog=clamp(r.prog,0,1);
-    r.inZone=inZone;
-    if(r.prog>=1){landCatch();}
-    else if(r.prog<=0){loseFish('slip');toast('The line slipped — it escaped!');}
-  }
+  };
   var reelTickAcc=0;
   function reelTick(dt){reelTickAcc+=dt;if(reelTickAcc>0.09){reelTickAcc=0;SFX.reel();}}
+
+  // ===== areas, sailing & tutorial =====
+  function caughtInArea(a){
+    var n=0;
+    for(var i=0;i<a.fish.length;i++){var f=a.fish[i];
+      if(f.r==='junk'||f.r==='treasure') continue;
+      if(save.journal[f.n]) n++;
+    }
+    return n;
+  }
+  function areaCleared(idx){var a=AREAS[idx];return caughtInArea(a)>=a.clearCount;}
+  function setArea(idx){
+    idx=clamp(idx,0,AREAS.length-1);
+    save.area=idx;
+    if(idx>save.unlockedArea) save.unlockedArea=idx;
+    FISH=curArea().fish;
+    game.state=STATE.IDLE; game.bobber.active=false; game.result=null; game.coach='';
+    persist();
+    maybeShowIntro(idx);
+  }
+  function sailTo(idx){ // travel to an unlocked area (free), or buy passage to the next one
+    var a=AREAS[idx];
+    if(idx>save.unlockedArea){
+      if(idx!==save.unlockedArea+1) return false;          // only the immediate next area
+      if(!areaCleared(save.unlockedArea)) return false;     // must have finished the current one
+      if(save.money<a.sailCost) return false;
+      save.money-=a.sailCost; SFX.fanfare();
+      toast('⛵ New waters unlocked: '+a.name+'!');
+    }else{ SFX.click(); }
+    closeOverlays();
+    setArea(idx);
+    return true;
+  }
+  function checkAreaComplete(){
+    var idx=save.area;
+    if(idx>=AREAS.length-1) return;
+    if(areaCleared(idx)&&save.unlockedArea===idx){
+      var key='cleared_'+AREAS[idx].id;
+      if(!save.tut.seen[key]){save.tut.seen[key]=true;persist();
+        toast('🏆 '+AREAS[idx].name+' complete! Open the Shop to sail to '+AREAS[idx+1].name+'.');
+      }
+    }
+  }
+  // ---- tutorial / intro cards (queued) ----
+  var cardQueue=[];
+  function showCard(card){cardQueue.push(card);if(cardQueue.length===1) presentCard();}
+  function presentCard(){
+    var c=cardQueue[0]; if(!c) return;
+    el('introTitle').innerHTML=c.title;
+    var body=el('introBody'); body.innerHTML='';
+    c.lines.forEach(function(ln){var p=document.createElement('p');p.className='sub';p.style.cssText='margin:0 0 12px';p.innerHTML=ln;body.appendChild(p);});
+    el('introBtn').textContent=c.button||'Got it';
+    show(ov.intro); game.paused=true;
+  }
+  function dismissCard(){
+    cardQueue.shift();
+    if(cardQueue.length){presentCard();}
+    else{hide(ov.intro); if(game.state!==STATE.TITLE) game.paused=false;}
+  }
+  function maybeShowIntro(idx){
+    var a=AREAS[idx];
+    if(save.tut.seen[a.id]) return;
+    save.tut.seen[a.id]=true; persist();
+    showCard({title:'📍 '+a.name, lines:[ '<i>'+a.tag+'</i>' ].concat(a.intro), button:'Start fishing'});
+  }
+  function startTutorialIfNeeded(){
+    if(!save.tut.done){
+      showCard({title:'🎣 How to fish',
+        lines:['<b>1 · Cast</b> — hold to charge the power bar, release to cast. Farther = deeper &amp; rarer.',
+               '<b>2 · Hook</b> — when the bobber dips and a “!” appears, tap (or press Space) quickly.',
+               '<b>3 · Reel</b> — keep the fish inside the moving green zone until the meter fills. No rush.'],
+        button:'Let’s go'});
+    }
+    maybeShowIntro(save.area);
+  }
 
   function clearEdges(){input.pressEdge=false;input.releaseEdge=false;input.clickEdge=false;}
 
@@ -817,13 +1093,14 @@
     // sun / moon arc
     drawCelestial();
 
-    // water
+    // water (per-area palette: [surface, mid, deep])
+    var wc=night?curArea().theme.wNight:curArea().theme.wDay;
     var wg=ctx.createLinearGradient(0,WATER_Y,0,H);
-    var deepCol=night?['#0a1830','#040a18']:['#1d5f8c','#08233f'];
-    wg.addColorStop(0,night?'#16324f':'#2b7fae');
-    wg.addColorStop(0.5,deepCol[0]);
-    wg.addColorStop(1,deepCol[1]);
+    wg.addColorStop(0,wc[0]);
+    wg.addColorStop(0.5,wc[1]);
+    wg.addColorStop(1,wc[2]);
     ctx.fillStyle=wg;ctx.fillRect(0,WATER_Y,W,H-WATER_Y);
+    drawDecor();
 
     // surface waves
     ctx.strokeStyle='rgba(255,255,255,'+(night?0.06:0.13)+')';
@@ -882,7 +1159,7 @@
 
     // gameplay overlays
     if(game.state===STATE.CAST) drawCastMeter();
-    if(game.state===STATE.REEL) drawReel();
+    if(game.state===STATE.FIGHT) (MG[game.mgName]||MG.reel).draw();
     if(game.state===STATE.BITE) drawBiteAlert();
     if(game.state===STATE.CAUGHT) drawResult();
     if(game.state===STATE.MISS) drawMiss();
@@ -918,11 +1195,17 @@
   }
 
   function drawDock(){
-    // simple silhouette dock + angler on the left
     var dy=WATER_Y;
+    var decor=curArea().theme.decor;
+    // platform the angler stands on (a pier plank, or a little boat hull elsewhere)
     ctx.fillStyle='#0c1422';
     ctx.fillRect(0,dy-8,W*0.20,10);
-    for(var i=0;i<3;i++){ctx.fillRect(8+i*40,dy,6,H-dy);}
+    if(decor==='pier'){
+      for(var i=0;i<3;i++){ctx.fillRect(8+i*40,dy,6,H-dy);} // pilings
+    }else{
+      // boat hull under the angler
+      ctx.beginPath();ctx.moveTo(W*0.04,dy-2);ctx.quadraticCurveTo(W*0.135,dy+26,W*0.235,dy-2);ctx.closePath();ctx.fill();
+    }
     // angler
     var ax=W*0.135,ay=dy-8;
     ctx.fillStyle='#0a111d';
@@ -932,19 +1215,38 @@
     ctx.strokeStyle='#1a2940';ctx.lineWidth=3;
     ctx.beginPath();ctx.moveTo(ax+4,ay-20);ctx.lineTo(rodTip().x,rodTip().y);ctx.stroke();
   }
+  function drawDecor(){
+    var decor=curArea().theme.decor;
+    if(decor==='coral'){
+      var cols=['#ff7a9c','#ffb24d','#7be0c0','#c79bff','#5fd0ff'];
+      for(var i=0;i<8;i++){
+        var x=110+i*108+(i%2?18:0), base=H-6, h=22+(i%3)*16;
+        ctx.fillStyle=cols[i%cols.length];ctx.globalAlpha=0.4;
+        ctx.beginPath();ctx.moveTo(x,base);
+        ctx.lineTo(x-11,base-h);ctx.lineTo(x-3,base-h*0.6);ctx.lineTo(x+3,base-h);ctx.lineTo(x+11,base-h*0.65);ctx.closePath();ctx.fill();
+      }
+      ctx.globalAlpha=1;
+    }else if(decor==='abyss'){
+      for(var k=0;k<4;k++){
+        var vx=170+k*200, g=ctx.createRadialGradient(vx,H,2,vx,H,90);
+        g.addColorStop(0,'rgba(120,210,255,0.10)');g.addColorStop(1,'rgba(120,210,255,0)');
+        ctx.fillStyle=g;ctx.fillRect(vx-90,H-140,180,140);
+      }
+    }
+  }
   function rodTip(){return {x:W*0.30,y:WATER_Y-92};}
 
   function drawLineAndBobber(){
     var b=game.bobber;
-    if(!b.active&&game.state!==STATE.REEL) return;
+    if(!b.active&&game.state!==STATE.FIGHT) return;
     var tip=rodTip();
     var bx=b.x,by=b.y;
-    if(game.state===STATE.REEL){bx=W*0.55;by=WATER_Y+6;} // fish below during reel
+    if(game.state===STATE.FIGHT){bx=W*0.55;by=WATER_Y+6;} // fish below during the fight
     // line
     ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=1.4;
     ctx.beginPath();ctx.moveTo(tip.x,tip.y);
     ctx.quadraticCurveTo((tip.x+bx)/2,Math.min(tip.y,by)-10,bx,by);ctx.stroke();
-    if(game.state===STATE.REEL) return;
+    if(game.state===STATE.FIGHT) return;
     // bobber
     ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(bx,by,6,0,Math.PI*2);ctx.fill();
     ctx.fillStyle='#ff4d5e';ctx.beginPath();
@@ -962,9 +1264,6 @@
       ctx.fillStyle=bd[0];
       ctx.fillRect(mx+mw*bd[1],my,mw*(bd[2]-bd[1]),mh);
     }
-    // boat lock on deep
-    if(!save.up.boat){ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(mx+mw*0.66,my,mw*0.34,mh);
-      ctx.fillStyle='#fff';ctx.font='10px system-ui';ctx.textAlign='center';ctx.fillText('⛵ locked',mx+mw*0.83,my+13);}
     // marker
     var px=mx+mw*game.castPower;
     ctx.fillStyle='#fff';ctx.fillRect(px-2,my-5,4,mh+10);
@@ -1021,6 +1320,58 @@
     ctx.textAlign='right';ctx.fillText((f?f.n:''),tx+tw,ty+th+26);
     ctx.fillStyle='#9fb3cc';ctx.font='11px system-ui';
     ctx.fillText(RAR[f.r].name+' · diff '+f.diff,tx+tw,ty+th+42);
+    ctx.textAlign='left';
+  }
+
+  function drawRhythm(){
+    var r=game.rhythm, f=game.hooked;
+    var tw=520, tx=W/2-tw/2, ty=H-150, th=40;
+    rr(tx-14,ty-46,tw+28,th+92,16,'rgba(8,18,34,0.88)');
+    ctx.textAlign='center';
+    ctx.fillStyle='#eaf2ff';ctx.font='bold 13px system-ui';
+    ctx.fillText('RHYTHM STRIKE',W/2,ty-24);
+    // track
+    ctx.fillStyle='#0e2436';rrPath(tx,ty,tw,th,10);ctx.fill();
+    // strike zone (flashes on hit/miss)
+    var zx=tx+(r.zone-r.zoneHalf)*tw, zw=r.zoneHalf*2*tw;
+    var miss=r.flash>0&&r.flashCol!=='#6fe3a4';
+    ctx.fillStyle=miss?'rgba(255,107,129,0.7)':(r.flash>0?'rgba(111,227,164,0.9)':'rgba(111,227,164,0.5)');
+    rrPath(zx,ty+3,zw,th-6,8);ctx.fill();
+    ctx.strokeStyle=miss?'#ff6b81':'#6fe3a4';ctx.lineWidth=2;rrPath(zx,ty+3,zw,th-6,8);ctx.stroke();
+    // marker
+    var mx=tx+r.marker*tw;
+    ctx.fillStyle='#fff';ctx.fillRect(mx-2,ty-6,4,th+12);
+    // progress
+    var py=ty+th+14;
+    ctx.fillStyle='rgba(255,255,255,0.08)';rrPath(tx,py,tw,12,6);ctx.fill();
+    var pgr=ctx.createLinearGradient(tx,0,tx+tw,0);pgr.addColorStop(0,'#8af0c0');pgr.addColorStop(1,'#54d39a');
+    ctx.fillStyle=pgr;rrPath(tx,py,Math.max(0,tw*r.prog),12,6);ctx.fill();
+    ctx.fillStyle=rarColor(f.r);ctx.font='bold 12px system-ui';
+    ctx.fillText(f.n+'  ·  '+RAR[f.r].name,W/2,py+30);
+    ctx.textAlign='left';
+  }
+
+  function drawTug(){
+    var u=game.tug, f=game.hooked;
+    var pw=420, px=W/2-pw/2, py=H-176;
+    rr(px-16,py-52,pw+32,164,16,'rgba(8,18,34,0.9)');
+    var tire=u.phase==='tire';
+    ctx.fillStyle=tire?'rgba(111,227,164,0.22)':'rgba(255,107,129,0.22)';
+    rrPath(px,py-44,pw,30,8);ctx.fill();
+    ctx.textAlign='center';ctx.font='bold 15px system-ui';
+    ctx.fillStyle=tire?'#8af0c0':'#ff8a9a';
+    ctx.fillText(tire?'● TIRING — REEL! (hold)':'● FIGHTING — EASE OFF! (release)',W/2,py-23);
+    ctx.textAlign='left';ctx.font='bold 11px system-ui';
+    ctx.fillStyle='#9fb3cc';ctx.fillText('HAUL',px,py+2);
+    ctx.fillStyle='rgba(255,255,255,0.08)';rrPath(px,py+8,pw,18,8);ctx.fill();
+    var hg=ctx.createLinearGradient(px,0,px+pw,0);hg.addColorStop(0,'#8af0c0');hg.addColorStop(1,'#54d39a');
+    ctx.fillStyle=hg;rrPath(px,py+8,Math.max(0,pw*u.prog),18,8);ctx.fill();
+    ctx.fillStyle='#9fb3cc';ctx.fillText('LINE TENSION',px,py+44);
+    ctx.fillStyle='rgba(255,255,255,0.08)';rrPath(px,py+50,pw,18,8);ctx.fill();
+    var tcol=u.tension>0.75?'#ff5d73':(u.tension>0.5?'#ffb24d':'#6db6ff');
+    ctx.fillStyle=tcol;rrPath(px,py+50,Math.max(0,pw*u.tension),18,8);ctx.fill();
+    ctx.fillStyle=rarColor(f.r);ctx.font='bold 12px system-ui';ctx.textAlign='center';
+    ctx.fillText(f.n+'  ·  '+RAR[f.r].name+' · diff '+f.diff,W/2,py+92);
     ctx.textAlign='left';
   }
 
@@ -1082,6 +1433,20 @@
     ctx.fillStyle='rgba(8,18,34,0.55)';rrPath(176,12,118,34,10);ctx.fill();
     ctx.fillStyle='#eaf2ff';ctx.font='bold 14px system-ui';
     ctx.fillText((isNight()?'🌙 ':'☀️ ')+clk,186,34);
+    // area name
+    var an='📍 '+curArea().name;
+    ctx.font='bold 14px system-ui';
+    var aw=ctx.measureText(an).width+26;
+    ctx.fillStyle='rgba(8,18,34,0.55)';rrPath(304,12,aw,34,10);ctx.fill();
+    ctx.fillStyle='#bfe2ff';ctx.fillText(an,316,34);
+    // coaching line (first-time tutorial)
+    if(game.coach){
+      ctx.textAlign='center';ctx.font='bold 15px system-ui';
+      var cw=ctx.measureText(game.coach).width+30;
+      ctx.fillStyle='rgba(22,44,70,0.94)';rrPath(W/2-cw/2,H-80,cw,30,10);ctx.fill();
+      ctx.fillStyle='#ffe08a';ctx.fillText(game.coach,W/2,H-60);
+      ctx.textAlign='left';
+    }
     // hint bar bottom
     if(game.hint&&game.state!==STATE.CAST){
       ctx.textAlign='center';
@@ -1131,10 +1496,12 @@
   // Lets the deterministic game logic be stepped synchronously for testing,
   // bypassing the rAF render loop. Exposes no data and runs nothing on its own.
   if(/[?&]debug/.test(location.search)){
-    window.__ca={game:game,STATE:STATE,FISH:FISH,RAR:RAR,save:save,input:input,
-      update:update,updateReel:updateReel,render:render,
-      startBite:startBite,startReel:startReel,releaseCast:releaseCast,
-      landCatch:landCatch,pickFish:pickFish,valueOf:valueOf,persist:persist};
+    window.__ca={game:game,STATE:STATE,AREAS:AREAS,MG:MG,RAR:RAR,save:save,input:input,
+      update:update,render:render,curArea:curArea,setArea:setArea,sailTo:sailTo,
+      startBite:startBite,startFight:startFight,releaseCast:releaseCast,
+      landCatch:landCatch,loseFish:loseFish,pickFish:pickFish,valueOf:valueOf,
+      areaCleared:areaCleared,caughtInArea:caughtInArea,persist:persist,
+      get FISH(){return FISH;}};
   }
 
   requestAnimationFrame(frame);
