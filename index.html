@@ -142,7 +142,7 @@
         <p class="sub">
           Charge your cast for distance, hook the fish the instant it bites,
           then keep it inside the bar to reel it in. Sell your catch, upgrade your
-          gear, and reach the legends of the deep.
+          gear, sail a better boat, and reach the legends of the deep.
         </p>
         <button class="btn" id="btnPlay">Start Fishing</button>
         <div class="keys">
@@ -296,6 +296,7 @@
   var save={
     money:0,
     up:{rod:0,line:0,lure:0,reel:0},
+    boat:0,                     // owned vessel tier (index into BOATS)
     journal:{},                 // name -> {count, max}
     area:0, unlockedArea:0,     // current biome + highest reached
     tut:{done:false, seen:{}},  // first-time tutorial + per-area intro flags
@@ -319,6 +320,9 @@
           save.journal=(s.journal&&typeof s.journal==='object')?s.journal:{};
           save.area=clamp(+s.area||0,0,nAreas-1);
           save.unlockedArea=clamp(+s.unlockedArea||save.area||0,0,nAreas-1);
+          save.boat=clamp(+s.boat||0,0,BOATS.length-1);
+          // never leave a returning player in open water without the boat that reaches it
+          var minB=minBoatForArea(save.unlockedArea); if(save.boat<minB) save.boat=minB;
           save.tut=Object.assign({done:false,seen:{}},(s.tut&&typeof s.tut==='object')?s.tut:{});
           if(!save.tut.seen||typeof save.tut.seen!=='object') save.tut.seen={};
           if(migrated){          // returning v1 player keeps money/journal, skips the intro tutorial
@@ -418,6 +422,35 @@
   var FISH=curArea().fish; // points at the current area's pool; updated by setArea()
   function rarColor(r){return (RAR[r]||RAR.common).color;}
 
+  // ---------- boats: an upgradable line of vessels ----------
+  // Buying a boat is how you "get on" the next one: lower tiers unlock farther
+  // waters (and sail you there); top tiers are pure power upgrades past the last area.
+  // perk: sell = catch-value multiplier · bite = faster bites (0..1) ·
+  //       rod = +catch-zone width (like extra Rod levels) · lure = +rare-fish luck.
+  var BOATS=[
+    {name:'Rowboat',  emoji:'🛶', area:0, cost:0,
+     perk:{sell:1.00,bite:0,   rod:0,lure:0},
+     blurb:'A humble rowboat — where every angler begins, fishing the calm Pier.'},
+    {name:'Skiff',    emoji:'⛵', area:1, cost:600,
+     perk:{sell:1.10,bite:0.12,rod:0,lure:0},
+     blurb:'A nimble sailboat — light enough to slip out to the Coral Reef at last.'},
+    {name:'Trawler',  emoji:'🚤', area:2, cost:3500,
+     perk:{sell:1.22,bite:0.18,rod:1,lure:0},
+     blurb:'A sturdy motorboat, built to brave the open water above the Abyss.'},
+    {name:'Cutter',   emoji:'🛥️', area:2, cost:9000,
+     perk:{sell:1.40,bite:0.22,rod:1,lure:1},
+     blurb:'A sleek deep-water cutter — faster on the bite, richer at the dock, luckier on the line.'},
+    {name:'Leviathan',emoji:'🚢', area:2, cost:24000,
+     perk:{sell:1.70,bite:0.28,rod:2,lure:1},
+     blurb:'The ultimate vessel — master of every water, sparing no luxury.'}
+  ];
+  // smallest boat tier that can reach a given area (areas map to tiers [0,1,2,2,2] -> 0,1,2)
+  function minBoatForArea(a){for(var i=0;i<BOATS.length;i++) if(BOATS[i].area>=a) return i; return 0;}
+  function curBoat(){return BOATS[clamp(save.boat,0,BOATS.length-1)];}
+  function boatPerk(){return curBoat().perk;}
+  function effRod(){return save.up.rod+boatPerk().rod;}   // rod level + boat catch-zone bonus
+  function effLure(){return save.up.lure+boatPerk().lure;} // lure level + boat luck bonus
+
   load();              // apply saved progress (includes v1 -> v2 migration)
   FISH=curArea().fish; // re-point pool to the loaded area
   persist();           // write v2 immediately so a migration is durable even with no further action
@@ -485,7 +518,7 @@
   function pickFish(zone){
     var pool=eligibleFish(zone);
     if(!pool.length) return FISH[0];
-    var luck=save.up.lure*0.18;
+    var luck=effLure()*0.18;
     var weights=[],total=0;
     for(var i=0;i<pool.length;i++){
       var r=pool[i].r;
@@ -607,26 +640,66 @@
         btn.addEventListener('click',function(){buy(u,cost);});}
       row.appendChild(btn);rows.appendChild(row);
     });
-    // ----- Voyage: travel between areas, gated by completing the previous one -----
-    var hd=document.createElement('div');
-    hd.style.cssText='margin:16px 2px 4px;font-weight:800;font-size:12px;opacity:.72;letter-spacing:1px';
-    hd.textContent='⛵ VOYAGE';
-    rows.appendChild(hd);
-    AREAS.forEach(function(a,idx){
+    // ----- Boats: an upgradable line of vessels. Buying one = unlock + climb aboard. -----
+    var bh=document.createElement('div');
+    bh.style.cssText='margin:18px 2px 4px;font-weight:800;font-size:12px;opacity:.72;letter-spacing:1px';
+    bh.textContent='⛵ BOATS';
+    rows.appendChild(bh);
+    BOATS.forEach(function(bt,tier){
+      if(tier===0) return;                  // the Rowboat is the starter vessel, not for sale
       var row=document.createElement('div');row.className='row';
-      var here=idx===save.area, unlocked=idx<=save.unlockedArea;
-      var caught=caughtInArea(a);
-      row.innerHTML='<div class="info"><div class="nm">'+a.name+(here?' · 📍 here':'')+'</div>'+
-        '<div class="ds">'+a.tag+' &nbsp;·&nbsp; '+Math.min(caught,a.clearCount)+'/'+a.clearCount+' to clear</div></div>';
+      var owned=tier<=save.boat, current=tier===save.boat;
+      row.innerHTML='<div class="info"><div class="nm">'+bt.emoji+' '+bt.name+(current?' · ⚓ aboard':'')+'</div>'+
+        '<div class="ds">'+boatShopDesc(tier)+'</div></div>';
       var btn=document.createElement('button');btn.className='buy';
-      if(here){btn.textContent='HERE';btn.classList.add('max');btn.disabled=true;}
-      else if(unlocked){btn.textContent='Sail ⛵';btn.addEventListener('click',function(){sailTo(idx);});}
-      else if(idx===save.unlockedArea+1){
-        if(!areaCleared(save.unlockedArea)){btn.textContent='🔒 finish '+AREAS[save.unlockedArea].name;btn.classList.add('max');btn.disabled=true;}
-        else{btn.textContent='Unlock 💰 '+fmt(a.sailCost);btn.disabled=save.money<a.sailCost;btn.addEventListener('click',function(){sailTo(idx);});}
+      if(owned){btn.textContent=current?'⚓ ABOARD':'OWNED';btn.classList.add('max');btn.disabled=true;}
+      else if(tier===save.boat+1){          // only the very next boat in the line is buyable
+        var opensNew=bt.area>save.unlockedArea;
+        if(opensNew&&!areaCleared(save.unlockedArea)){
+          btn.textContent='🔒 clear '+AREAS[save.unlockedArea].name;btn.classList.add('max');btn.disabled=true;
+        }else{
+          btn.textContent='💰 '+fmt(bt.cost);btn.disabled=save.money<bt.cost;
+          btn.addEventListener('click',function(){buyBoat(tier);});
+        }
       }else{btn.textContent='🔒 locked';btn.classList.add('max');btn.disabled=true;}
       row.appendChild(btn);rows.appendChild(row);
     });
+    // ----- Travel: sail (free) between waters you've already opened -----
+    if(save.unlockedArea>0){
+      var th=document.createElement('div');
+      th.style.cssText='margin:18px 2px 4px;font-weight:800;font-size:12px;opacity:.72;letter-spacing:1px';
+      th.textContent='🧭 TRAVEL';
+      rows.appendChild(th);
+      AREAS.forEach(function(a,idx){
+        if(idx>save.unlockedArea) return;   // can't sail to water you haven't opened with a boat yet
+        var row=document.createElement('div');row.className='row';
+        var here=idx===save.area, caught=caughtInArea(a);
+        row.innerHTML='<div class="info"><div class="nm">'+a.name+(here?' · 📍 here':'')+'</div>'+
+          '<div class="ds">'+a.tag+' &nbsp;·&nbsp; '+Math.min(caught,a.clearCount)+'/'+a.clearCount+' to clear</div></div>';
+        var btn=document.createElement('button');btn.className='buy';
+        if(here){btn.textContent='HERE';btn.classList.add('max');btn.disabled=true;}
+        else{btn.textContent='Sail ⛵';btn.addEventListener('click',function(){sailTo(idx);});}
+        row.appendChild(btn);rows.appendChild(row);
+      });
+    }
+  }
+  // one-line perk summary for a boat row in the shop
+  function boatShopDesc(tier){
+    var bt=BOATS[tier],p=bt.perk,parts=[];
+    parts.push('×'+p.sell.toFixed(2)+' sell');
+    if(p.bite>0) parts.push('+'+Math.round(p.bite*100)+'% bite');
+    if(p.rod>0)  parts.push('+'+p.rod+' zone');
+    if(p.lure>0) parts.push('+'+p.lure+' luck');
+    var pre=(minBoatForArea(bt.area)===tier&&bt.area>0)?('Reaches '+AREAS[bt.area].name+'. '):'';
+    return pre+parts.join(' · ');
+  }
+  // longer perk sentence for the boarding card
+  function perkLine(p){
+    var bits=['sells your catch for <b>×'+p.sell.toFixed(2)+'</b>'];
+    if(p.bite>0) bits.push('bites come <b>'+Math.round(p.bite*100)+'% sooner</b>');
+    if(p.rod>0)  bits.push('a <b>wider</b> catch zone');
+    if(p.lure>0) bits.push('<b>better odds</b> of rare fish');
+    return '⚓ She '+bits.join(', ')+'.';
   }
   function buy(u,cost){
     if(save.money<cost) return;
@@ -687,7 +760,8 @@
   }
   function beginWaitForBite(){
     var base=rand(2.4,6.0);
-    base*=(1-Math.min(0.5,save.up.lure*0.1));
+    base*=(1-Math.min(0.5,effLure()*0.1));
+    base*=(1-boatPerk().bite);              // better boats get bites sooner
     game.waitTimer=base;
   }
   function startBite(){
@@ -709,7 +783,7 @@
   function landCatch(){
     var f=game.hooked;
     var len=rollLength(f);
-    var val=valueOf(f,len);
+    var val=Math.round(valueOf(f,len)*boatPerk().sell); // better boats sell for more
     save.money+=val;
     var isNew=false,isRecord=false;
     if(f.r!=='junk'){
@@ -814,7 +888,7 @@
         r.prog=0.45;                                    // higher start = more time before escape
         r.bar=0.5; r.barV=0;
         r.fishY=0.5; r.target=0.5; r.reTimer=0;
-        r.barHalf=clamp(0.13+save.up.rod*0.02,0.13,0.26); // bigger base & max bar
+        r.barHalf=clamp(0.13+effRod()*0.02,0.13,0.30); // bigger base & max bar (boat widens it further)
         r.diff=f.diff;
         r.fill=0.55+save.up.line*0.05+(save.up.reel||0)*0.05-f.diff*0.010;
         r.drain=0.13+f.diff*0.016;                      // gentler drain = more time
@@ -857,7 +931,7 @@
         r.prog=0.42;
         r.marker=0.5; r.dir=1;
         r.zone=rand(0.25,0.75);
-        r.zoneHalf=clamp(0.17+save.up.rod*0.018,0.17,0.30)-f.diff*0.006;
+        r.zoneHalf=clamp(0.17+effRod()*0.018,0.17,0.33)-f.diff*0.006;
         r.speed=0.85+f.diff*0.10;                                   // sweeps per second
         r.hitGain=0.15+save.up.line*0.012+(save.up.reel||0)*0.012;
         r.missPen=0.05;
@@ -894,7 +968,7 @@
         var u=game.tug;
         u.prog=0.30; u.tension=0;
         u.phase='tire'; u.phaseT=rand(1.1,1.7);
-        u.gain=0.18+save.up.line*0.015+(save.up.reel||0)*0.015-f.diff*0.006;
+        u.gain=0.18+save.up.line*0.015+(save.up.reel||0)*0.015+boatPerk().rod*0.012-f.diff*0.006;
         u.strain=0.55+f.diff*0.05;                 // tension/sec while pulling during a fight
         u.relax=0.55+save.up.line*0.03;            // tension recovery/sec when easing off
         u.recover=0.05;                            // prog lost/sec when slacking during tire
@@ -948,17 +1022,26 @@
     persist();
     maybeShowIntro(idx);
   }
-  function sailTo(idx){ // travel to an unlocked area (free), or buy passage to the next one
-    var a=AREAS[idx];
-    if(idx>save.unlockedArea){
-      if(idx!==save.unlockedArea+1) return false;          // only the immediate next area
-      if(!areaCleared(save.unlockedArea)) return false;     // must have finished the current one
-      if(save.money<a.sailCost) return false;
-      save.money-=a.sailCost; SFX.fanfare();
-      toast('⛵ New waters unlocked: '+a.name+'!');
-    }else{ SFX.click(); }
+  function sailTo(idx){ // free travel between waters already opened by a boat
+    if(idx<0||idx>save.unlockedArea) return false;
+    if(idx===save.area){closeOverlays();return false;}
+    SFX.click(); closeOverlays(); setArea(idx); return true;
+  }
+  // buy the next boat in the line: pay, climb aboard, and (if it opens new water) set sail there
+  function buyBoat(tier){
+    if(tier<1||tier>=BOATS.length) return false;                 // valid, purchasable tier only
+    if(tier!==save.boat+1) return false;                         // strictly the next vessel in the line
+    var bt=BOATS[tier];
+    var opensNew=bt.area>save.unlockedArea;
+    if(opensNew&&!areaCleared(save.unlockedArea)) return false;  // must finish current water before sailing on
+    if(save.money<bt.cost) return false;
+    save.money-=bt.cost; save.boat=tier; persist(); SFX.fanfare();
+    toast('⚓ '+bt.emoji+' '+bt.name+' — climb aboard!');
     closeOverlays();
-    setArea(idx);
+    showCard({title:bt.emoji+' All aboard the '+bt.name+'!',
+              lines:[bt.blurb, perkLine(bt.perk)],
+              button:opensNew?'Set sail ⛵':'Back to fishing'});
+    if(opensNew) setArea(bt.area);                               // sail there; queues the area intro after this card
     return true;
   }
   function checkAreaComplete(){
@@ -967,7 +1050,7 @@
     if(areaCleared(idx)&&save.unlockedArea===idx){
       var key='cleared_'+AREAS[idx].id;
       if(!save.tut.seen[key]){save.tut.seen[key]=true;persist();
-        toast('🏆 '+AREAS[idx].name+' complete! Open the Shop to sail to '+AREAS[idx+1].name+'.');
+        toast('🏆 '+AREAS[idx].name+' complete! Open the Shop to buy the '+BOATS[minBoatForArea(idx+1)].emoji+' '+BOATS[minBoatForArea(idx+1)].name+' and sail on.');
       }
     }
   }
@@ -1197,14 +1280,14 @@
   function drawDock(){
     var dy=WATER_Y;
     var decor=curArea().theme.decor;
-    // platform the angler stands on (a pier plank, or a little boat hull elsewhere)
-    ctx.fillStyle='#0c1422';
-    ctx.fillRect(0,dy-8,W*0.20,10);
     if(decor==='pier'){
+      // wooden pier the angler stands on
+      ctx.fillStyle='#0c1422';
+      ctx.fillRect(0,dy-8,W*0.20,10);
       for(var i=0;i<3;i++){ctx.fillRect(8+i*40,dy,6,H-dy);} // pilings
     }else{
-      // boat hull under the angler
-      ctx.beginPath();ctx.moveTo(W*0.04,dy-2);ctx.quadraticCurveTo(W*0.135,dy+26,W*0.235,dy-2);ctx.closePath();ctx.fill();
+      // the angler's own boat — silhouette grows with the owned tier
+      drawBoat(W*0.135,dy,clamp(save.boat,1,BOATS.length-1));
     }
     // angler
     var ax=W*0.135,ay=dy-8;
@@ -1214,6 +1297,51 @@
     // rod
     ctx.strokeStyle='#1a2940';ctx.lineWidth=3;
     ctx.beginPath();ctx.moveTo(ax+4,ay-20);ctx.lineTo(rodTip().x,rodTip().y);ctx.stroke();
+  }
+  // the player's vessel, drawn under/behind the angler; detail grows with tier (1..4)
+  function drawBoat(cx,dy,tier){
+    var hw=110+tier*16;          // hull width grows with the tier
+    var deckY=dy-6;
+    // hull
+    ctx.fillStyle='#0c1422';
+    ctx.beginPath();
+    ctx.moveTo(cx-hw/2,deckY);
+    ctx.lineTo(cx+hw/2,deckY);
+    ctx.quadraticCurveTo(cx+hw/2-10,dy+24,cx,dy+26);
+    ctx.quadraticCurveTo(cx-hw/2+10,dy+24,cx-hw/2,deckY);
+    ctx.closePath();ctx.fill();
+    // waterline trim — its colour signals the tier
+    var trim=tier>=4?'#e7c46b':tier>=3?'#7fb3ff':tier>=2?'#5fd0c4':'#3a6f9e';
+    ctx.fillStyle=trim;ctx.fillRect(cx-hw/2+6,deckY-3,hw-12,3);
+    if(tier===1){                // Skiff: a single mast + triangular sail
+      ctx.strokeStyle='#22344c';ctx.lineWidth=3;
+      ctx.beginPath();ctx.moveTo(cx+20,deckY);ctx.lineTo(cx+20,deckY-58);ctx.stroke();
+      ctx.fillStyle='rgba(223,234,255,0.95)';
+      ctx.beginPath();ctx.moveTo(cx+18,deckY-56);ctx.lineTo(cx+18,deckY-6);ctx.lineTo(cx-16,deckY-6);ctx.closePath();ctx.fill();
+    }else if(tier===2){          // Trawler: aft cabin + smokestack with a puff
+      ctx.fillStyle='#16263c';ctx.fillRect(cx+12,deckY-30,34,26);
+      ctx.fillStyle='#cfe0f5';ctx.fillRect(cx+17,deckY-24,9,9);ctx.fillRect(cx+31,deckY-24,9,9);
+      ctx.fillStyle='#0a141f';ctx.fillRect(cx+50,deckY-40,10,36);
+      ctx.fillStyle='rgba(200,210,225,0.5)';ctx.beginPath();ctx.arc(cx+55,deckY-46,7,0,Math.PI*2);ctx.fill();
+    }else if(tier===3){          // Cutter: cabin + twin masts & sails
+      ctx.fillStyle='#16263c';ctx.fillRect(cx+14,deckY-26,30,22);
+      ctx.strokeStyle='#22344c';ctx.lineWidth=3;
+      ctx.beginPath();ctx.moveTo(cx-30,deckY);ctx.lineTo(cx-30,deckY-50);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(cx+46,deckY);ctx.lineTo(cx+46,deckY-64);ctx.stroke();
+      ctx.fillStyle='rgba(223,234,255,0.95)';
+      ctx.beginPath();ctx.moveTo(cx-28,deckY-48);ctx.lineTo(cx-28,deckY-8);ctx.lineTo(cx-54,deckY-8);ctx.closePath();ctx.fill();
+      ctx.beginPath();ctx.moveTo(cx+48,deckY-62);ctx.lineTo(cx+48,deckY-8);ctx.lineTo(cx+74,deckY-8);ctx.closePath();ctx.fill();
+    }else{                       // Leviathan: tall bridge, stack, flag, portholes
+      ctx.fillStyle='#16263c';ctx.fillRect(cx+10,deckY-40,44,36);
+      ctx.fillStyle='#cfe0f5';
+      ctx.fillRect(cx+16,deckY-34,9,9);ctx.fillRect(cx+30,deckY-34,9,9);ctx.fillRect(cx+44,deckY-34,9,9);
+      ctx.fillStyle='#0a141f';ctx.fillRect(cx+58,deckY-54,12,50);
+      ctx.fillStyle=trim;ctx.fillRect(cx+58,deckY-54,12,5);
+      ctx.fillStyle='rgba(200,210,225,0.5)';ctx.beginPath();ctx.arc(cx+64,deckY-60,8,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='#22344c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx-30,deckY);ctx.lineTo(cx-30,deckY-64);ctx.stroke();
+      ctx.fillStyle='#e7c46b';ctx.beginPath();ctx.moveTo(cx-30,deckY-64);ctx.lineTo(cx-8,deckY-58);ctx.lineTo(cx-30,deckY-52);ctx.closePath();ctx.fill();
+      ctx.fillStyle=trim;for(var i=0;i<4;i++){ctx.beginPath();ctx.arc(cx-hw/2+26+i*28,dy+8,3,0,Math.PI*2);ctx.fill();}
+    }
   }
   function drawDecor(){
     var decor=curArea().theme.decor;
@@ -1433,8 +1561,8 @@
     ctx.fillStyle='rgba(8,18,34,0.55)';rrPath(176,12,118,34,10);ctx.fill();
     ctx.fillStyle='#eaf2ff';ctx.font='bold 14px system-ui';
     ctx.fillText((isNight()?'🌙 ':'☀️ ')+clk,186,34);
-    // area name
-    var an='📍 '+curArea().name;
+    // area name + current boat
+    var an='📍 '+curArea().name+'  '+curBoat().emoji;
     ctx.font='bold 14px system-ui';
     var aw=ctx.measureText(an).width+26;
     ctx.fillStyle='rgba(8,18,34,0.55)';rrPath(304,12,aw,34,10);ctx.fill();
@@ -1496,8 +1624,11 @@
   // Lets the deterministic game logic be stepped synchronously for testing,
   // bypassing the rAF render loop. Exposes no data and runs nothing on its own.
   if(/[?&]debug/.test(location.search)){
-    window.__ca={game:game,STATE:STATE,AREAS:AREAS,MG:MG,RAR:RAR,save:save,input:input,
+    window.__ca={game:game,STATE:STATE,AREAS:AREAS,BOATS:BOATS,MG:MG,RAR:RAR,save:save,input:input,
       update:update,render:render,curArea:curArea,setArea:setArea,sailTo:sailTo,
+      buyBoat:buyBoat,boatPerk:boatPerk,curBoat:curBoat,minBoatForArea:minBoatForArea,
+      effRod:effRod,effLure:effLure,beginWaitForBite:beginWaitForBite,
+      renderShop:renderShop,renderJournal:renderJournal,
       startBite:startBite,startFight:startFight,releaseCast:releaseCast,
       landCatch:landCatch,loseFish:loseFish,pickFish:pickFish,valueOf:valueOf,
       areaCleared:areaCleared,caughtInArea:caughtInArea,persist:persist,
